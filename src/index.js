@@ -1,68 +1,130 @@
-import { DurableObject } from "cloudflare:workers";
-
 /**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
+ * Durable Object Class: QueryHistory
+ * purpose: This class stores a list of query pairs for a single user.
  */
-
-/**
- * Env provides a mechanism to reference bindings declared in wrangler.jsonc within JavaScript
- *
- * @typedef {Object} Env
- * @property {DurableObjectNamespace} MY_DURABLE_OBJECT - The Durable Object namespace binding
- */
-
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param {DurableObjectState} ctx - The interface for interacting with Durable Object state
-	 * @param {Env} env - The interface to reference bindings declared in wrangler.jsonc
-	 */
-	constructor(ctx, env) {
-		super(ctx, env);
+export class QueryHistory {
+	constructor(state, env) {
+	  this.state = state;
+	  this.storage = state.storage;
 	}
-
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param {string} name - The name provided to a Durable Object instance from a Worker
-	 * @returns {Promise<string>} The greeting to be sent back to the Worker
-	 */
-	async sayHello(name) {
-		return `Hello, ${name}!`;
+  
+	// Handle HTTP requests sent to this Durable Object
+	async fetch(request) {
+	  const url = new URL(request.url);
+  
+	  switch (url.pathname) {
+		case '/add': {
+		  if (request.method !== 'POST') {
+			return new Response('Method Not Allowed', { status: 405 });
+		  }
+  
+		  const { natural, boolean } = await request.json();
+		  let history = (await this.storage.get('history')) || [];
+		  history.unshift({ natural, boolean }); 
+		  await this.storage.put('history', history);
+  
+		  return new Response(JSON.stringify({ success: true }), {
+			headers: { 'Content-Type': 'application/json' },
+		  });
+		}
+  
+		case '/history': {
+		  // Gets all stored history
+		  const history = (await this.storage.get('history')) || [];
+		  return new Response(JSON.stringify(history), {
+			headers: { 'Content-Type': 'application/json' },
+		  });
+		}
+  
+		default:
+		  return new Response('Not found', { status: 404 });
+	  }
 	}
-}
-
-export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param {Request} request - The request submitted to the Worker from the client
-	 * @param {Env} env - The interface to reference bindings declared in wrangler.jsonc
-	 * @param {ExecutionContext} ctx - The execution context of the Worker
-	 * @returns {Promise<Response>} The response to be sent back to the client
-	 */
+  }
+  
+  /**
+   * Main Worker Fetch Handler
+   * reason: This is the entry point for all requests.
+   */
+  export default {
 	async fetch(request, env, ctx) {
-		// Create a stub to open a communication channel with the Durable Object
-		// instance named "foo".
-		//
-		// Requests from all Workers to the Durable Object instance named "foo"
-		// will go to a single remote Durable Object instance.
-		const stub = env.MY_DURABLE_OBJECT.getByName("foo");
-
-		// Call the `sayHello()` RPC method on the stub to invoke the method on
-		// the remote Durable Object instance.
-		const greeting = await stub.sayHello("world");
-
-		return new Response(greeting);
+	  const url = new URL(request.url);
+  
+	  
+	  const doId = env.MY_DURABLE_OBJECT.idFromName('main-history');
+	  const stub = env.MY_DURABLE_OBJECT.get(doId);
+  
+	  // Route requests based on the URL path
+	  if (url.pathname === '/api/generate-query') {
+		return await handleGenerateQuery(request, stub, env);
+	  }
+  
+	  if (url.pathname === '/api/history') {
+		// Forward the request to the DO's /history endpoint
+		return stub.fetch(new Request(url.origin + '/history'));
+	  }
+  
+	  return new Response('Not found. Try /api/generate-query or /api/history', {
+		status: 404,
+	  });
 	},
-};
+  };
+  
+  /**
+   * Worker Function: handleGenerateQuery
+   * Reason: Calls the AI model and then stores the result in the Durable Object.
+   */
+  async function handleGenerateQuery(request, doStub, env) {
+	if (request.method !== 'POST') {
+	  return new Response('Please send a POST request', { status: 405 });
+	}
+  
+	// 1.This  gets users query from the request body
+	const { natural_query } = await request.json();
+	if (!natural_query) {
+	  return new Response('Missing "natural_query" in request body', { status: 400 });
+	}
+  
+	
+	// 2.the AI prompt for reference
+	const prompt = `You are an expert recruiter who builds advanced boolean search queries for job boards like LinkedIn and Google Jobs. Your task is to translate a user's plain-text request into a single, syntactically correct boolean query.
+
+	Rules:
+	- Use parentheses () for grouping.
+	- Use uppercase AND, OR, NOT.
+	- Use quotes "" for exact phrases (e.g., "software engineer").
+	- Infer related titles when appropriate (e.g., "software job" -> "software engineer" OR "developer").
+	- Identify negative keywords and use NOT (e.g., "no finance" -> NOT "finance" NOT "fintech").
+
+	IMPORTANT: Your entire response must be *only* the boolean query string and nothing else. Do not add any explanation, greeting, or introductory text.
+
+	User Request: ${natural_query}
+	Boolean Query:`;
+  
+	// 3. Calling the Workers AI model
+	const ai = env.AI; 
+	const aiResponse = await ai.run('@cf/meta/llama-3-8b-instruct', { prompt });
+	const boolean_query = aiResponse.response.trim();
+  
+	// 4. Storing the result in the Durable Object
+	
+	const doRequest = new Request(new URL(request.url).origin + '/add', {
+	  method: 'POST',
+	  headers: { 'Content-Type': 'application/json' },
+	  body: JSON.stringify({
+		natural: natural_query,
+		boolean: boolean_query,
+	  }),
+	});
+	doStub.fetch(doRequest); 
+  
+	// 5. Sending the AI's response back to the user
+	return new Response(
+	  JSON.stringify({
+		boolean_query: boolean_query,
+	  }),
+	  {
+		headers: { 'Content-Type': 'application/json' },
+	  }
+	);
+  }

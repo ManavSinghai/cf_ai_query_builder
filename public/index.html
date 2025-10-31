@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Job Query Builder</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main>
+        <h1>AI Job Query Builder</h1>
+        <p>Describe your ideal job in plain English, and the AI will build the perfect boolean search query for you.</p>
+        
+        <div class="form-container">
+            <textarea id="natural-query" rows="4" placeholder="e.g., I'm a new grad looking for a software job that uses Python, but I don't want to be a manager."></textarea>
+            <button id="generate-button">Generate Query</button>
+        </div>
+        
+        <h2>Your AI-Generated Query</h2>
+        <div class="results-container">
+            <pre><code id="results-output">...your query will appear here...</code></pre>
+        </div>
+        
+        <h2>History</h2>
+        <div id="history-list">
+            <p>Loading history...</p>
+        </div>
+    </main>
+    <script src="main.js"></script>
+</body>
+</html>
